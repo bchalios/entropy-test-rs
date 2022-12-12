@@ -3,6 +3,7 @@ use std::time::{self, Duration, Instant};
 
 use clap::{Parser, ValueEnum};
 use log::{debug, info, warn};
+use serde::{Deserialize, Serialize};
 use spmc::{Receiver, TryRecvError};
 
 mod bindings;
@@ -11,6 +12,19 @@ mod rng;
 use rng::{DevUrandom, Rng};
 
 use crate::rng::{OsRng, ThreadRng};
+
+#[derive(Serialize, Deserialize)]
+struct Stats {
+    num_entries: usize,
+    mean: u64,
+    stddev: u64,
+    min: u64,
+    max: u64,
+    p50: u64,
+    p90: u64,
+    p99: u64,
+    p999: u64,
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum RngType {
@@ -39,6 +53,9 @@ struct Args {
     /// Number of threads to spawn
     #[arg(short, long, default_value_t = 1)]
     threads: u32,
+    /// Stats file to write json stats
+    #[arg(short, long, default_value_t = String::from("results.txt"))]
+    stats_file: String,
 }
 
 fn set_ctrlc_handler(num_threads: u32) -> Receiver<()> {
@@ -136,23 +153,54 @@ fn main() {
             .for_each(|val| hist.increment(val.as_nanos() as u64).unwrap());
     }
 
+    let stats = Stats {
+        num_entries: hist.entries() as usize,
+        mean: hist.mean().unwrap(),
+        stddev: hist.stddev().unwrap(),
+        min: hist.minimum().unwrap(),
+        max: hist.maximum().unwrap(),
+        p50: hist.percentile(50.0).unwrap(),
+        p90: hist.percentile(90.0).unwrap(),
+        p99: hist.percentile(99.0).unwrap(),
+        p999: hist.percentile(99.9).unwrap(),
+    };
+
     info!("Number of requests executed: {}", hist.entries());
     info!(
         "Total bytes requested: {}",
-        hist.entries() as usize * args.rand_bytes_num
+        stats.num_entries * args.rand_bytes_num
     );
-    info!("Average time per request: {} nsec", hist.mean().unwrap());
-    info!(
-        "Standard deviation of request time: {} nsec",
-        hist.stddev().unwrap()
-    );
-    info!("Maximum time for request: {} nsec", hist.maximum().unwrap());
-    info!("Minimum time for request: {} nsec", hist.minimum().unwrap());
+    info!("Average time per request: {} nsec", stats.mean);
+    info!("Standard deviation of request time: {} nsec", stats.stddev);
+    info!("Maximum time for request: {} nsec", stats.max);
+    info!("Minimum time for request: {} nsec", stats.min);
     info!(
         "Request time percentiles: p50: {} p90: {} p99: {}, p999: {}",
-        hist.percentile(50.0).unwrap(),
-        hist.percentile(90.0).unwrap(),
-        hist.percentile(99.0).unwrap(),
-        hist.percentile(99.9).unwrap()
+        stats.p50, stats.p90, stats.p99, stats.p999
     );
+
+    /*
+    std::fs::write(
+        args.stats_file,
+        serde_json::to_string_pretty(&stats).unwrap(),
+    )
+    .unwrap();
+    */
+
+    std::fs::write(
+        args.stats_file,
+        format!(
+            "{} {} {} {} {} {} {} {} {}",
+            stats.num_entries,
+            stats.mean,
+            stats.stddev,
+            stats.max,
+            stats.min,
+            stats.p50,
+            stats.p90,
+            stats.p99,
+            stats.p999
+        ),
+    )
+    .unwrap();
 }
